@@ -38,6 +38,7 @@ async def get_twitch_token():
         async with session.post(url, params=params) as resp:
             data = await resp.json()
             access_token = data["access_token"]
+            print("✅ Twitch token fetched.")
 
 async def get_stream_data(username):
     url = f"https://api.twitch.tv/helix/streams?user_login={username}"
@@ -74,13 +75,14 @@ def make_embed(username, title, is_live, profile_image_url):
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user}")
+    print(f"✅ Logged in as {bot.user}")
     await get_twitch_token()
     bot.loop.create_task(check_title_loop())
 
 async def check_title_loop():
     global last_titles, last_status
     await bot.wait_until_ready()
+    print("🚀 Title checking loop started")
 
     while not bot.is_closed():
         for streamer, info in STREAMERS.items():
@@ -96,23 +98,31 @@ async def check_title_loop():
                     else "No title available"
                 )
 
+                print(f"🔍 [{streamer}] is_live: {is_live} | Title: {current_title}")
+
                 normalized_title = current_title.strip().lower()
                 last_normalized = (last_titles[streamer] or "").strip().lower()
                 status_changed = last_status[streamer] != is_live
 
                 if normalized_title != last_normalized or status_changed:
+                    print(f"📢 Change detected for {streamer}")
                     last_titles[streamer] = current_title
                     last_status[streamer] = is_live
                     embed = make_embed(streamer, current_title, is_live, profile_image_url)
+
                     channel = bot.get_channel(info["channel_id"])
+                    if channel is None:
+                        print(f"❗ Channel {info['channel_id']} not found!")
+                        continue
+
                     if info["ping"]:
                         await channel.send(f"@everyone {'🔴' if is_live else '⚫'} {streamer} changed stream title:", embed=embed)
                     else:
                         await channel.send(embed=embed)
 
             except Exception as e:
-                print(f"Error with {streamer}: {e}")
+                print(f"❌ Error checking {streamer}: {e}")
+
         await asyncio.sleep(60)
 
 bot.run(TOKEN)
-
