@@ -1,58 +1,45 @@
-import os
 import discord
 import aiohttp
 import asyncio
-import tweepy
-from discord import Embed
+import os
 
-# Discord intents
+TOKEN = os.environ["DISCORD_TOKEN"]
+CHANNEL_ID_PING = int(os.environ["CHANNEL_ID_PING"])      # For jasontheween (with ping)
+CHANNEL_ID_NO_PING = int(os.environ["CHANNEL_ID_NO_PING"])  # For others (no ping)
+
+STREAMERS = {
+    "jasontheween": {"channel_id": CHANNEL_ID_PING, "ping": True},
+    "stableronaldo": {"channel_id": CHANNEL_ID_NO_PING, "ping": False},
+    "adapt": {"channel_id": CHANNEL_ID_NO_PING, "ping": False},
+    "plaqueboymax": {"channel_id": CHANNEL_ID_NO_PING, "ping": False},
+    "silky": {"channel_id": CHANNEL_ID_NO_PING, "ping": False},
+    "lacy": {"channel_id": CHANNEL_ID_NO_PING, "ping": False},
+}
+
+TWITCH_CLIENT_ID = os.environ["TWITCH_CLIENT_ID"]
+TWITCH_CLIENT_SECRET = os.environ["TWITCH_CLIENT_SECRET"]
+
 intents = discord.Intents.default()
 bot = discord.Client(intents=intents)
 
-# Environment variables
-TOKEN = os.getenv("DISCORD_TOKEN")
-TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
-TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
-
-CHANNEL_ID_PING = int(os.getenv("CHANNEL_ID_PING"))
-CHANNEL_ID_NO_PING = int(os.getenv("CHANNEL_ID_NO_PING"))
-
-# Tweepy OAuth1.0a Authentication for Twitter
-twitter_auth = tweepy.OAuth1UserHandler(
-    os.getenv("TWITTER_API_KEY"),
-    os.getenv("TWITTER_API_SECRET"),
-    os.getenv("TWITTER_ACCESS_TOKEN"),
-    os.getenv("TWITTER_ACCESS_SECRET"),
-)
-twitter_api = tweepy.API(twitter_auth)
-
-# List of streamers to monitor
-# Format: (streamer_login, discord_channel_id, ping_role_bool)
-STREAMERS = [
-    ("jasontheween", CHANNEL_ID_PING, True),
-    ("stableronaldo", CHANNEL_ID_NO_PING, False),
-    ("adapt", CHANNEL_ID_NO_PING, False),
-    ("plaqueboymax", CHANNEL_ID_NO_PING, False),
-    ("silky", CHANNEL_ID_NO_PING, False),
-    ("lacy", CHANNEL_ID_NO_PING, False),
-]
-
-last_title = {}
+access_token = None
+last_titles = {streamer: None for streamer in STREAMERS}
 
 async def get_twitch_token():
+    global access_token
     url = "https://id.twitch.tv/oauth2/token"
     params = {
         "client_id": TWITCH_CLIENT_ID,
         "client_secret": TWITCH_CLIENT_SECRET,
-        "grant_type": "client_credentials",
+        "grant_type": "client_credentials"
     }
     async with aiohttp.ClientSession() as session:
         async with session.post(url, params=params) as resp:
             data = await resp.json()
-            return data["access_token"]
+            access_token = data["access_token"]
 
-async def get_stream_data(streamer):
-    url = f"https://api.twitch.tv/helix/streams?user_login={streamer}"
+async def get_stream_data(username):
+    url = f"https://api.twitch.tv/helix/streams?user_login={username}"
     headers = {
         "Client-ID": TWITCH_CLIENT_ID,
         "Authorization": f"Bearer {access_token}"
@@ -61,8 +48,19 @@ async def get_stream_data(streamer):
         async with session.get(url, headers=headers) as resp:
             return await resp.json()
 
-async def fetch_user_info(streamer):
-    url = f"https://api.twitch.tv/helix/users?login={streamer}"
+def make_embed(username, title, is_live, profile_image_url):
+    color = discord.Color.red() if is_live else discord.Color.dark_grey()
+    embed = discord.Embed(
+        title=f"{username}",
+        description=title,
+        color=color
+    )
+    embed.set_thumbnail(url=profile_image_url)
+    embed.set_footer(text="Live" if is_live else "Offline")
+    return embed
+
+async def get_user_data(username):
+    url = f"https://api.twitch.tv/helix/users?login={username}"
     headers = {
         "Client-ID": TWITCH_CLIENT_ID,
         "Authorization": f"Bearer {access_token}"
@@ -76,57 +74,48 @@ async def fetch_user_info(streamer):
 
 @bot.event
 async def on_ready():
-    global access_token
     print(f"Logged in as {bot.user}")
-    access_token = await get_twitch_token()
+    await get_twitch_token()
     bot.loop.create_task(check_title_loop())
 
 async def check_title_loop():
-    global last_title
+    global last_titles
     await bot.wait_until_ready()
     while not bot.is_closed():
         try:
-            for streamer, channel_id, ping_role in STREAMERS:
+            for streamer, info in STREAMERS.items():
                 data = await get_stream_data(streamer)
-                is_live = bool(data["data"])
-                current_title = data["data"][0]["title"] if is_live else "Offline"
-
-                if streamer not in last_title:
-                    last_title[streamer] = None
-
-                if current_title != last_title[streamer]:
-                    last_title[streamer] = current_title
-                    channel = bot.get_channel(channel_id)
-                    user_info = await fetch_user_info(streamer)
-                    profile_img = user_info["profile_image_url"] if user_info else None
-                    display_name = user_info["display_name"] if user_info else streamer
-
-                    embed = Embed(title=display_name, description=f"**{current_title}**", color=0x9146FF)
-                    if profile_img:
-                        embed.set_thumbnail(url=profile_img)
-
-                    message_content = "@everyone" if ping_role else None
-
-                    # Send Discord message with embed and optional ping
-                    if message_content:
-                        await channel.send(content=message_content, embed=embed)
-                    else:
-                        await channel.send(embed=embed)
-
-                    # Twitter post only for jasontheween
-                    if streamer == "jasontheween":
-                        emoji = "🔴" if is_live else "⚫"
-                        tweet_text = f"{emoji} JasonTheWeen has changed his title to -> {current_title}"
-                        try:
-                            twitter_api.update_status(tweet_text)
-                            print(f"Tweeted: {tweet_text}")
-                        except Exception as e:
-                            print(f"Failed to tweet: {e}")
+                user_data = await get_user_data(streamer)
+                profile_image_url = user_data["profile_image_url"] if user_data else None
+                
+                if data["data"]:
+                    # Streamer is live
+                    current_title = data["data"][0]["title"]
+                    if current_title != last_titles[streamer]:
+                        last_titles[streamer] = current_title
+                        embed = make_embed(streamer, current_title, True, profile_image_url)
+                        channel = bot.get_channel(info["channel_id"])
+                        if info["ping"]:
+                            await channel.send(f"@everyone 🔴 {streamer} changed stream title:", embed=embed)
+                        else:
+                            await channel.send(embed=embed)
+                else:
+                    # Streamer is offline
+                    # Get user’s offline status title if you want (Twitch doesn't provide offline title easily)
+                    # So just send offline update if title changed (optional)
+                    offline_title = "Offline or no stream"
+                    if last_titles[streamer] != offline_title:
+                        last_titles[streamer] = offline_title
+                        embed = make_embed(streamer, offline_title, False, profile_image_url)
+                        channel = bot.get_channel(info["channel_id"])
+                        if info["ping"]:
+                            await channel.send(f"@everyone ⚫ {streamer} changed stream title:", embed=embed)
+                        else:
+                            await channel.send(embed=embed)
 
         except Exception as e:
             print(f"Error in check_title_loop: {e}")
-
-        await asyncio.sleep(60)
+        await asyncio.sleep(60)  # Check every 60 seconds
 
 bot.run(TOKEN)
 
