@@ -2,30 +2,36 @@ import discord
 import aiohttp
 import asyncio
 import os
+from flask import Flask
+from threading import Thread
 
-TOKEN = os.environ["DISCORD_TOKEN"]
-CHANNEL_ID_PING = int(os.environ["CHANNEL_ID_PING"])
-CHANNEL_ID_NO_PING = int(os.environ["CHANNEL_ID_NO_PING"])
+# Optional keep-alive server (can be removed for Render)
+app = Flask('')
+@app.route('/')
+def home():
+    return "Bot is alive!"
+def run():
+    app.run(host='0.0.0.0', port=8080)
+def keep_alive():
+    Thread(target=run).start()
 
+# Environment Variables
+TOKEN = os.environ["TOKEN"]
+CHANNEL_ID = int(os.environ["CHANNEL_ID"])
+TWITCH_USERNAME = "jasontheween"
 TWITCH_CLIENT_ID = os.environ["TWITCH_CLIENT_ID"]
 TWITCH_CLIENT_SECRET = os.environ["TWITCH_CLIENT_SECRET"]
 
-STREAMERS = {
-    "jasontheween": {"channel_id": CHANNEL_ID_PING, "ping": True},
-    "stableronaldo": {"channel_id": CHANNEL_ID_NO_PING, "ping": False},
-    "adapt": {"channel_id": CHANNEL_ID_NO_PING, "ping": False},
-    "plaqueboymax": {"channel_id": CHANNEL_ID_NO_PING, "ping": False},
-    "silky": {"channel_id": CHANNEL_ID_NO_PING, "ping": False},
-    "lacy": {"channel_id": CHANNEL_ID_NO_PING, "ping": False},
-}
-
+# Discord client
 intents = discord.Intents.default()
 bot = discord.Client(intents=intents)
 
+# Globals
 access_token = None
-last_titles = {streamer: None for streamer in STREAMERS}
-last_status = {streamer: None for streamer in STREAMERS}
+last_title = None
+profile_image_url = None
 
+# Twitch Token
 async def get_twitch_token():
     global access_token
     url = "https://id.twitch.tv/oauth2/token"
@@ -38,10 +44,24 @@ async def get_twitch_token():
         async with session.post(url, params=params) as resp:
             data = await resp.json()
             access_token = data["access_token"]
-            print("✅ Twitch token fetched.")
 
-async def get_stream_data(username):
-    url = f"https://api.twitch.tv/helix/streams?user_login={username}"
+# Get Twitch user info for avatar
+async def get_twitch_user_data():
+    global profile_image_url
+    url = f"https://api.twitch.tv/helix/users?login={TWITCH_USERNAME}"
+    headers = {
+        "Client-ID": TWITCH_CLIENT_ID,
+        "Authorization": f"Bearer {access_token}"
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            data = await resp.json()
+            if data["data"]:
+                profile_image_url = data["data"][0]["profile_image_url"]
+
+# Get current stream info
+async def get_stream_data():
+    url = f"https://api.twitch.tv/helix/streams?user_login={TWITCH_USERNAME}"
     headers = {
         "Client-ID": TWITCH_CLIENT_ID,
         "Authorization": f"Bearer {access_token}"
@@ -50,79 +70,44 @@ async def get_stream_data(username):
         async with session.get(url, headers=headers) as resp:
             return await resp.json()
 
-async def get_user_data(username):
-    url = f"https://api.twitch.tv/helix/channels?broadcaster_login={username}"
-    headers = {
-        "Client-ID": TWITCH_CLIENT_ID,
-        "Authorization": f"Bearer {access_token}"
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as resp:
-            data = await resp.json()
-            return data["data"][0] if data["data"] else None
-
-def make_embed(username, title, is_live, profile_image_url):
-    color = discord.Color.red() if is_live else discord.Color.dark_grey()
-    embed = discord.Embed(
-        title=f"{username}",
-        description=title,
-        color=color
-    )
-    if profile_image_url:
-        embed.set_thumbnail(url=profile_image_url)
-    embed.set_footer(text="🔴 LIVE" if is_live else "⚫ OFFLINE")
-    return embed
-
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
     await get_twitch_token()
+    await get_twitch_user_data()
     bot.loop.create_task(check_title_loop())
 
+# Loop to check stream title every 60 seconds
 async def check_title_loop():
-    global last_titles, last_status
+    global last_title
     await bot.wait_until_ready()
-    print("🚀 Title checking loop started")
+    channel = bot.get_channel(CHANNEL_ID)
 
     while not bot.is_closed():
-        for streamer, info in STREAMERS.items():
-            try:
-                stream_data = await get_stream_data(streamer)
-                user_data = await get_user_data(streamer)
-                profile_image_url = user_data["thumbnail_url"].replace("{width}", "100").replace("{height}", "100") if user_data else None
+        try:
+            data = await get_stream_data()
+            if data["data"]:
+                current_title = data["data"][0]["title"]
+                if current_title != last_title:
+                    last_title = current_title
 
-                is_live = bool(stream_data["data"])
-                current_title = (
-                    stream_data["data"][0]["title"] if is_live
-                    else user_data["title"] if user_data
-                    else "No title available"
-                )
+                    embed = discord.Embed(
+                        title="🔴 Stream Title Changed!",
+                        description=f"**{TWITCH_USERNAME}**'s new stream title:\n> {current_title}",
+                        color=discord.Color.purple()
+                    )
+                    embed.set_thumbnail(url=profile_image_url)
+                    embed.set_footer(text="Twitch Title Watcher Bot")
 
-                print(f"🔍 [{streamer}] is_live: {is_live} | Title: {current_title}")
+                    await channel.send(content="@everyone", embed=embed)
 
-                normalized_title = current_title.strip().lower()
-                last_normalized = (last_titles[streamer] or "").strip().lower()
-                status_changed = last_status[streamer] != is_live
-
-                if normalized_title != last_normalized or status_changed:
-                    print(f"📢 Change detected for {streamer}")
-                    last_titles[streamer] = current_title
-                    last_status[streamer] = is_live
-                    embed = make_embed(streamer, current_title, is_live, profile_image_url)
-
-                    channel = bot.get_channel(info["channel_id"])
-                    if channel is None:
-                        print(f"❗ Channel {info['channel_id']} not found!")
-                        continue
-
-                    if info["ping"]:
-                        await channel.send(f"@everyone {'🔴' if is_live else '⚫'} {streamer} changed stream title:", embed=embed)
-                    else:
-                        await channel.send(embed=embed)
-
-            except Exception as e:
-                print(f"❌ Error checking {streamer}: {e}")
+        except Exception as e:
+            print(f"[Error] {e}")
 
         await asyncio.sleep(60)
 
+# Keep alive (only needed for Replit)
+keep_alive()
+
+# Start bot
 bot.run(TOKEN)
