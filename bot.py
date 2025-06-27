@@ -2,18 +2,7 @@ import discord
 import aiohttp
 import asyncio
 import os
-from flask import Flask
-from threading import Thread
 
-# Optional keep-alive server (can be removed for Render)
-app = Flask('')
-@app.route('/')
-def home():
-    return "Bot is alive!"
-def run():
-    app.run(host='0.0.0.0', port=8080)
-def keep_alive():
-    Thread(target=run).start()
 
 # Environment Variables
 TOKEN = os.environ["TOKEN"]
@@ -106,8 +95,7 @@ async def check_title_loop():
 
         await asyncio.sleep(60)
 
-# Keep alive (only needed for Replit)
-keep_alive()
+
 
 # Start bot
 bot.run(TOKEN)
