@@ -8,7 +8,7 @@ import tweepy
 
 logging.basicConfig(level=logging.INFO)
 
-# Load environment variables directly from OS environment (no dotenv)
+# Load environment variables from OS environment (no dotenv)
 TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID_PING = int(os.getenv("CHANNEL_ID_PING"))
 CHANNEL_ID_NO_PING = int(os.getenv("CHANNEL_ID_NO_PING"))
@@ -137,7 +137,11 @@ async def check_titles_loop():
                         await channel_ping.send("@everyone", embed=embed)
                         if streamer == "jasontheween":
                             tweet_text = f"{status_text} JasonTheWeen has changed his title to → {current_title}"
-                            twitter_api.update_status(tweet_text)
+                            try:
+                                twitter_api.update_status(tweet_text)
+                                print(f"Tweeted: {tweet_text}")
+                            except Exception as e:
+                                print(f"Failed to tweet: {e}")
                     else:
                         await channel_no_ping.send(embed=embed)
             except Exception as e:
