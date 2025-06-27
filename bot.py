@@ -3,27 +3,24 @@ from discord.ext import commands
 import aiohttp
 import asyncio
 import os
-from dotenv import load_dotenv
 import logging
 import tweepy
 
-load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
-# Load credentials
+# Load environment variables directly from OS environment (no dotenv)
 TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID_PING = int(os.getenv("CHANNEL_ID_PING"))
 CHANNEL_ID_NO_PING = int(os.getenv("CHANNEL_ID_NO_PING"))
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
 
-# Twitter API credentials
 TWITTER_API_KEY = os.getenv("TWITTER_API_KEY")
 TWITTER_API_SECRET = os.getenv("TWITTER_API_SECRET")
 TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
 TWITTER_ACCESS_SECRET = os.getenv("TWITTER_ACCESS_SECRET")
 
-# Setup Twitter API
+# Setup Twitter API client using tweepy OAuth1UserHandler
 auth = tweepy.OAuth1UserHandler(
     TWITTER_API_KEY, TWITTER_API_SECRET,
     TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET
@@ -68,12 +65,8 @@ async def get_stream_data(user_login):
         async with session.get(url, headers=headers) as resp:
             return await resp.json()
 
-async def get_channel_info(user_login):
-    user_info = await get_user_info(user_login)
-    if not user_info:
-        return None
-    broadcaster_id = user_info["id"]
-    url = f"https://api.twitch.tv/helix/channels?broadcaster_id={broadcaster_id}"
+async def get_user_info(user_login):
+    url = f"https://api.twitch.tv/helix/users?login={user_login}"
     headers = {
         "Client-ID": TWITCH_CLIENT_ID,
         "Authorization": f"Bearer {access_token}"
@@ -85,8 +78,12 @@ async def get_channel_info(user_login):
                 return data["data"][0]
             return None
 
-async def get_user_info(user_login):
-    url = f"https://api.twitch.tv/helix/users?login={user_login}"
+async def get_channel_info(user_login):
+    user_info = await get_user_info(user_login)
+    if not user_info:
+        return None
+    broadcaster_id = user_info["id"]
+    url = f"https://api.twitch.tv/helix/channels?broadcaster_id={broadcaster_id}"
     headers = {
         "Client-ID": TWITCH_CLIENT_ID,
         "Authorization": f"Bearer {access_token}"
