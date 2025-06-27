@@ -5,7 +5,7 @@ import os
 
 
 # Environment Variables
-TOKEN = os.environ["TOKEN"]
+TOKEN = os.environ["DISCORD_TOKEN"]
 CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 TWITCH_USERNAME = "jasontheween"
 TWITCH_CLIENT_ID = os.environ["TWITCH_CLIENT_ID"]
