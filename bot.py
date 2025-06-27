@@ -1,26 +1,23 @@
 import discord
+from discord.ext import commands, tasks
 import aiohttp
 import asyncio
 import os
 
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Environment Variables
-TOKEN = os.environ["DISCORD_TOKEN"]
-CHANNEL_ID = int(os.environ["CHANNEL_ID"])
-TWITCH_USERNAME = "jasontheween"
+# Env variables
+TOKEN = os.environ["TOKEN"]
 TWITCH_CLIENT_ID = os.environ["TWITCH_CLIENT_ID"]
 TWITCH_CLIENT_SECRET = os.environ["TWITCH_CLIENT_SECRET"]
 
-# Discord client
-intents = discord.Intents.default()
-bot = discord.Client(intents=intents)
-
-# Globals
 access_token = None
-last_title = None
-profile_image_url = None
 
-# Twitch Token
+# Structure: {username: {"channel": channel_id, "ping": True/False, "last_title": str}}
+watched_streamers = {}
+
+# Get Twitch app token
 async def get_twitch_token():
     global access_token
     url = "https://id.twitch.tv/oauth2/token"
@@ -34,23 +31,9 @@ async def get_twitch_token():
             data = await resp.json()
             access_token = data["access_token"]
 
-# Get Twitch user info for avatar
-async def get_twitch_user_data():
-    global profile_image_url
-    url = f"https://api.twitch.tv/helix/users?login={TWITCH_USERNAME}"
-    headers = {
-        "Client-ID": TWITCH_CLIENT_ID,
-        "Authorization": f"Bearer {access_token}"
-    }
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as resp:
-            data = await resp.json()
-            if data["data"]:
-                profile_image_url = data["data"][0]["profile_image_url"]
-
-# Get current stream info
-async def get_stream_data():
-    url = f"https://api.twitch.tv/helix/streams?user_login={TWITCH_USERNAME}"
+# Get Twitch stream title
+async def get_stream(username):
+    url = f"https://api.twitch.tv/helix/streams?user_login={username}"
     headers = {
         "Client-ID": TWITCH_CLIENT_ID,
         "Authorization": f"Bearer {access_token}"
@@ -59,43 +42,92 @@ async def get_stream_data():
         async with session.get(url, headers=headers) as resp:
             return await resp.json()
 
+# Get Twitch profile image
+async def get_profile(username):
+    url = f"https://api.twitch.tv/helix/users?login={username}"
+    headers = {
+        "Client-ID": TWITCH_CLIENT_ID,
+        "Authorization": f"Bearer {access_token}"
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            data = await resp.json()
+            if data["data"]:
+                return data["data"][0]["profile_image_url"]
+            return None
+
+# Bot ready
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user}")
     await get_twitch_token()
-    await get_twitch_user_data()
-    bot.loop.create_task(check_title_loop())
+    check_streams.start()
 
-# Loop to check stream title every 60 seconds
-async def check_title_loop():
-    global last_title
-    await bot.wait_until_ready()
-    channel = bot.get_channel(CHANNEL_ID)
+# !watchp command — with @everyone ping
+@bot.command()
+async def watchp(ctx, username: str):
+    username = username.lower()
+    watched_streamers[username] = {
+        "channel": ctx.channel.id,
+        "ping": True,
+        "last_title": None
+    }
+    await ctx.send(f"🔔 Watching `{username}` with **@everyone** ping.")
 
-    while not bot.is_closed():
+# !watch command — no ping
+@bot.command()
+async def watch(ctx, username: str):
+    username = username.lower()
+    watched_streamers[username] = {
+        "channel": ctx.channel.id,
+        "ping": False,
+        "last_title": None
+    }
+    await ctx.send(f"👀 Watching `{username}` silently (no ping).")
+
+# !unwatch command
+@bot.command()
+async def unwatch(ctx, username: str):
+    username = username.lower()
+    if username in watched_streamers:
+        del watched_streamers[username]
+        await ctx.send(f"🗑️ Unwatched `{username}`.")
+    else:
+        await ctx.send(f"`{username}` wasn't being watched.")
+
+# !clear command
+@bot.command()
+async def clear(ctx):
+    watched_streamers.clear()
+    await ctx.send("🧹 Cleared all watched streamers.")
+
+# Background task to check all streamers
+@tasks.loop(seconds=60)
+async def check_streams():
+    for username, info in list(watched_streamers.items()):
         try:
-            data = await get_stream_data()
+            data = await get_stream(username)
             if data["data"]:
-                current_title = data["data"][0]["title"]
-                if current_title != last_title:
-                    last_title = current_title
+                new_title = data["data"][0]["title"]
+                if info["last_title"] != new_title:
+                    watched_streamers[username]["last_title"] = new_title
+                    profile_img = await get_profile(username)
 
                     embed = discord.Embed(
-                        title="🔴 Stream Title Changed!",
-                        description=f"**{TWITCH_USERNAME}**'s new stream title:\n> {current_title}",
+                        title=f"{username}'s stream title changed!",
+                        description=f"> {new_title}",
                         color=discord.Color.purple()
                     )
-                    embed.set_thumbnail(url=profile_image_url)
+                    if profile_img:
+                        embed.set_thumbnail(url=profile_img)
                     embed.set_footer(text="Twitch Title Watcher Bot")
 
-                    await channel.send(content="@everyone", embed=embed)
+                    channel = bot.get_channel(info["channel"])
+                    if channel:
+                        await channel.send(content=("@everyone" if info["ping"] else None), embed=embed)
 
         except Exception as e:
-            print(f"[Error] {e}")
+            print(f"[Error checking {username}] {e}")
 
-        await asyncio.sleep(60)
-
-
-
-# Start bot
+# Run bot
 bot.run(TOKEN)
